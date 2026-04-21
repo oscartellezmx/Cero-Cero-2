@@ -13,5 +13,5 @@ workflows:
 
     publishing:
       app_store_connect:
-        api_key: Oscar Tellez Araiza
+        api_key: Oscar Tellez
         submit_to_testflight: true
