@@ -13,5 +13,5 @@ workflows:
 
     publishing:
       app_store_connect:
-        api_key: Oscar Tellez
+        api_key: J4WSXL48G4
         submit_to_testflight: true
