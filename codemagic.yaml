@@ -1,0 +1,17 @@
+workflows:
+  upload-ipa:
+    name: Upload IPA
+
+    scripts:
+      - name: Download IPA
+        script: |
+          curl -L -o app.ipa "C:\Users\oscar\OneDrive\CERO CERO 2\PickleMap\Archivos Apple\ios-2.117896.1.ipa"
+
+      - name: Verify file
+        script: |
+          ls -lah
+
+    publishing:
+      app_store_connect:
+        api_key: Oscar Tellez Araiza
+        submit_to_testflight: true
