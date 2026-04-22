@@ -9,9 +9,9 @@ workflows:
         private_key: |
           -----BEGIN PRIVATE KEY-----
           MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgB+cr6gZf4LC7G7NC
-gK8vhZBLMicrtWvnIAApScF6KS6gCgYIKoZIzj0DAQehRANCAAQqHZra0DeCgsFu
-CMgQCz7NuFmEPpFURk9suhI3R7jjRqnW/vmu7f5a1z3dKggIlquumtFdrE/C8GxD
-mBoumA8h
+          gK8vhZBLMicrtWvnIAApScF6KS6gCgYIKoZIzj0DAQehRANCAAQqHZra0DeCgsFu
+          CMgQCz7NuFmEPpFURk9suhI3R7jjRqnW/vmu7f5a1z3dKggIlquumtFdrE/C8GxD
+          mBoumA8h
           -----END PRIVATE KEY-----
 
     scripts:
