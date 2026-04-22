@@ -7,21 +7,22 @@ workflows:
         APP_STORE_CONNECT_KEY_IDENTIFIER: J4WSXL48G4
         APP_STORE_CONNECT_ISSUER_ID: aa6ad4ed-61c9-4450-86c4-950ef17604f7
 
-      app_store_connect_api_key:
-        key_id: J4WSXL48G4
-        issuer_id: aa6ad4ed-61c9-4450-86c4-950ef17604f7
-        private_key: |
+    scripts:
+      - name: Download IPA
+        script: |
+          curl -L -o app.ipa "https://drive.google.com/uc?export=download&id=11N3Po8d4JCsgCWp_ikunFmbKOLJqaOz_"
+
+      - name: Create API key file
+        script: |
+          mkdir -p ~/.appstoreconnect/private_keys
+          cat > ~/.appstoreconnect/private_keys/AuthKey_$APP_STORE_CONNECT_KEY_IDENTIFIER.p8 << 'EOF'
           -----BEGIN PRIVATE KEY-----
           MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgB+cr6gZf4LC7G7NC
           gK8vhZBLMicrtWvnIAApScF6KS6gCgYIKoZIzj0DAQehRANCAAQqHZra0DeCgsFu
           CMgQCz7NuFmEPpFURk9suhI3R7jjRqnW/vmu7f5a1z3dKggIlquumtFdrE/C8GxD
           mBoumA8h
           -----END PRIVATE KEY-----
-
-    scripts:
-      - name: Download IPA
-        script: |
-          curl -L -o app.ipa "https://drive.google.com/uc?export=download&id=11N3Po8d4JCsgCWp_ikunFmbKOLJqaOz_"
+          EOF
 
       - name: Upload to App Store Connect
         script: |
