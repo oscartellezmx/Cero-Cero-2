@@ -7,21 +7,17 @@ workflows:
         script: |
           curl -L -o app.ipa "https://drive.google.com/uc?export=download&id=11N3Po8d4JCsgCWp_ikunFmbKOLJqaOz_"
 
-      - name: Verify file
-        script: |
-          ls -lah
-
     publishing:
       app_store_connect:
-        api_key:
-          key_id: J4WSXL48G4
-          issuer_id: aa6ad4ed-61c9-4450-86c4-950ef17604f7
-          private_key: |
-            -----BEGIN PRIVATE KEY-----
-            MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgB+cr6gZf4LC7G7NC
-            gK8vhZBLMicrtWvnIAApScF6KS6gCgYIKoZIzj0DAQehRANCAAQqHZra0DeCgsFu
-            CMgQCz7NuFmEPpFURk9suhI3R7jjRqnW/vmu7f5a1z3dKggIlquumtFdrE/C8GxD
-            mBoumA8h
-            -----END PRIVATE KEY-----
+        auth: api_key
+        key_id: J4WSXL48G4
+        issuer_id: aa6ad4ed-61c9-4450-86c4-950ef17604f7
+        private_key: |
+          -----BEGIN PRIVATE KEY-----
+          MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQgB+cr6gZf4LC7G7NC
+          gK8vhZBLMicrtWvnIAApScF6KS6gCgYIKoZIzj0DAQehRANCAAQqHZra0DeCgsFu
+          CMgQCz7NuFmEPpFURk9suhI3R7jjRqnW/vmu7f5a1z3dKggIlquumtFdrE/C8GxD
+          mBoumA8h
+          -----END PRIVATE KEY-----
 
         submit_to_testflight: true
