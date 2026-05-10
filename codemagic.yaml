@@ -10,7 +10,7 @@ workflows:
     scripts:
       - name: Download IPA
         script: |
-          curl -L -o app.ipa "https://www.dropbox.com/scl/fi/vnkn2v61z93qo0p5afx0d/ios-2.117896.1.ipa?rlkey=mrzqzwz3gm0kvsmkf9io96qlr&st=p9cydpym&dl=1"
+          curl -L -o app.ipa "https://www.dropbox.com/scl/fi/vnkn2v61z93qo0p5afx0d/ios-2.117896.1.ipa?rlkey=mrzqzwz3gm0kvsmkf9io96qlr&st=p9cydpym&dl=2"
 
       - name: Create API key file
         script: |
