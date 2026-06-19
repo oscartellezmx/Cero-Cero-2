@@ -35,6 +35,14 @@
 <canvas id="c"></canvas>
 <div id="dev"></div>
 <div class="flash" id="flash"></div>
+<div id="loadingOverlay" style="position:fixed;inset:0;background:#0a1410;display:flex;
+  flex-direction:column;align-items:center;justify-content:center;z-index:200;gap:16px">
+  <div style="font-size:2em;color:#c8f520;font-weight:bold;text-shadow:2px 2px 0 #1a6b6b">🏓 PICKLEBALL</div>
+  <div style="width:200px;height:8px;background:rgba(255,255,255,0.15);border-radius:4px;overflow:hidden">
+    <div id="loadBar" style="width:0%;height:100%;background:#c8f520;transition:width 0.2s"></div>
+  </div>
+  <div style="color:#7ec9c9;font-size:0.85em">Cargando gráficos…</div>
+</div>
 <div id="ui">
 
   <!-- TITLE SCREEN -->
@@ -61,6 +69,43 @@
 </div>
 <script type="module">
 import { STR } from './strings.js';
+
+// ── ASSET LOADING ────────────────────────────────────────────────────────────
+const ASSET_URLS = {
+  bg:     'https://d8j0ntlcm91z4.cloudfront.net/user_38twmyos4yiP4WjzyYrLYfD1nU6/hf_20260619_052436_8a9fdda8-4da9-4f67-9048-f109a6b453bb.png',
+  player: 'https://d8j0ntlcm91z4.cloudfront.net/user_38twmyos4yiP4WjzyYrLYfD1nU6/hf_20260619_052441_d1338161-7d97-4549-bb1b-26a275df1eec.png',
+  cpu:    'https://d8j0ntlcm91z4.cloudfront.net/user_38twmyos4yiP4WjzyYrLYfD1nU6/hf_20260619_052449_68a02d54-1c06-4b22-b940-f273fee67045.png',
+  ball:   'https://d8j0ntlcm91z4.cloudfront.net/user_38twmyos4yiP4WjzyYrLYfD1nU6/hf_20260619_052432_4b0f2a6d-53a7-4590-ab2d-4b6f753d3608.png',
+};
+const ASSETS = {};
+let assetsReady = false;
+function loadAssets() {
+  const keys = Object.keys(ASSET_URLS);
+  let loaded = 0;
+  const bar = document.getElementById('loadBar');
+  const overlay = document.getElementById('loadingOverlay');
+  return new Promise(resolve => {
+    const tick = () => {
+      loaded++;
+      if (bar) bar.style.width = Math.round(loaded/keys.length*100) + '%';
+      if (loaded === keys.length) {
+        assetsReady = true;
+        if (overlay) { overlay.style.transition='opacity 0.4s'; overlay.style.opacity='0';
+          setTimeout(()=>overlay.remove(), 400); }
+        resolve();
+      }
+    };
+    keys.forEach(k => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = tick;
+      img.onerror = tick;
+      img.src = ASSET_URLS[k];
+      ASSETS[k] = img;
+    });
+  });
+}
+const assetsPromise = loadAssets();
 
 // ── SEEDED RNG ──────────────────────────────────────────────────────────────
 let seed = Date.now() & 0x7fffffff;
@@ -156,13 +201,32 @@ const C = {
 };
 
 // ── DRAW COURT ───────────────────────────────────────────────────────────────
+function drawStadiumBg() {
+  const img = ASSETS.bg;
+  if (assetsReady && img.complete && img.naturalWidth > 0) {
+    const imgAspect = img.naturalWidth / img.naturalHeight;
+    const canvasAspect = W / H;
+    let dw, dh, dx, dy;
+    if (canvasAspect > imgAspect) { dw = W; dh = W/imgAspect; } else { dh = H; dw = H*imgAspect; }
+    dx = (W-dw)/2; dy = (H-dh)/2;
+    ctx.drawImage(img, dx, dy, dw, dh);
+    // Darken overlay for readability of game elements
+    ctx.fillStyle = 'rgba(10,20,15,0.35)';
+    ctx.fillRect(0,0,W,H);
+  } else {
+    const bg = ctx.createLinearGradient(0,0,0,H);
+    bg.addColorStop(0,'#1a4a2a'); bg.addColorStop(1,'#0a2010');
+    ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+  }
+}
+
 function drawCourt() {
   // Fill court quads
   function courtQuad(x0,y0,x1,y1, fill) {
     const a = iso(x0,y0,0), b = iso(x1,y0,0), c2 = iso(x1,y1,0), d = iso(x0,y1,0);
     ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
     ctx.lineTo(c2.x,c2.y); ctx.lineTo(d.x,d.y); ctx.closePath();
-    ctx.fillStyle = fill; ctx.fill();
+    ctx.fillStyle = fill; ctx.globalAlpha = 0.88; ctx.fill(); ctx.globalAlpha = 1;
   }
   // Main court
   courtQuad(0,0,COURT_W,COURT_H, C.court);
@@ -203,77 +267,89 @@ function drawCourt() {
   ctx.strokeStyle='#f5f0dc'; ctx.lineWidth=3; ctx.stroke();
 }
 
-// ── DRAW PERSON ──────────────────────────────────────────────────────────────
-function drawPerson(wx, wy, jersey, skin, flip) {
+// ── DRAW PERSON (sprite-based, console-quality) ──────────────────────────────
+function drawPerson(wx, wy, jersey, skin, flip, hitFlash, isCpu) {
   const p = iso(wx, wy, 0);
   const sc = Math.min(W,H) / 700;
-  const r = 10 * sc;
-  const sx = p.x + (flip ? -2*sc : 2*sc);
-  const sy = p.y;
+  // Depth scale: closer to camera (higher wy) = bigger, simulates iso depth
+  const depthScale = 0.78 + (wy / COURT_H) * 0.5;
+  const baseSize = 130 * sc * depthScale;
+  const img = isCpu ? ASSETS.cpu : ASSETS.player;
 
-  // Shadow
-  ctx.beginPath(); ctx.ellipse(p.x, p.y+2*sc, r*1.2, r*0.4, 0,0,Math.PI*2);
-  ctx.fillStyle = C.shadow; ctx.fill();
+  // Ground shadow (soft blurred ellipse)
+  ctx.save();
+  ctx.filter = 'blur(4px)';
+  ctx.beginPath();
+  ctx.ellipse(p.x, p.y + baseSize*0.06, baseSize*0.34, baseSize*0.11, 0, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(0,0,0,0.45)';
+  ctx.fill();
+  ctx.restore();
 
-  // Legs
-  ctx.strokeStyle = skin; ctx.lineWidth = 4*sc;
-  ctx.beginPath(); ctx.moveTo(sx, sy-r*0.5);
-  ctx.lineTo(sx - 4*sc*(flip?-1:1), sy + r*1.2); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(sx, sy-r*0.5);
-  ctx.lineTo(sx + 4*sc*(flip?-1:1), sy + r*1.2); ctx.stroke();
-  // Shoes
-  ctx.fillStyle = '#333'; ctx.strokeStyle='#222'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.ellipse(sx - 4*sc*(flip?-1:1), sy+r*1.2, 4*sc,2*sc,0,0,Math.PI*2); ctx.fill();
-  ctx.beginPath(); ctx.ellipse(sx + 4*sc*(flip?-1:1), sy+r*1.2, 4*sc,2*sc,0,0,Math.PI*2); ctx.fill();
-  // Body
-  ctx.fillStyle = jersey; ctx.strokeStyle='#1a6b6b'; ctx.lineWidth=2*sc;
-  ctx.beginPath(); ctx.roundRect(sx-r*0.7, sy-r*1.6, r*1.4, r*1.4, 4*sc); ctx.fill(); ctx.stroke();
-  // Head
-  ctx.fillStyle = skin; ctx.strokeStyle='#5c3410'; ctx.lineWidth=2*sc;
-  ctx.beginPath(); ctx.arc(sx, sy-r*1.8, r*0.7, 0, Math.PI*2); ctx.fill(); ctx.stroke();
-  // Hair
-  ctx.fillStyle='#3a1a00';
-  ctx.beginPath(); ctx.arc(sx, sy-r*2.1, r*0.55, Math.PI, 0); ctx.fill();
-  // Eyes
-  ctx.fillStyle='#fff';
-  ctx.beginPath(); ctx.arc(sx+(flip?2:-2)*sc, sy-r*1.9, 2*sc,0,Math.PI*2); ctx.fill();
-  ctx.fillStyle='#1a1a3a';
-  ctx.beginPath(); ctx.arc(sx+(flip?2.5:-1.5)*sc, sy-r*1.9, 1*sc,0,Math.PI*2); ctx.fill();
-  // Paddle arm
-  ctx.strokeStyle = skin; ctx.lineWidth=4*sc;
-  ctx.beginPath(); ctx.moveTo(sx+r*0.7*(flip?-1:1), sy-r*1.1);
-  ctx.lineTo(sx+r*1.8*(flip?-1:1), sy-r*0.5); ctx.stroke();
-  // Paddle
-  const px2 = sx+r*1.8*(flip?-1:1), py2 = sy-r*0.5;
-  ctx.save(); ctx.translate(px2,py2); ctx.rotate(flip?-0.6:0.6);
-  ctx.fillStyle='#d4845a'; ctx.strokeStyle='#1a6b6b'; ctx.lineWidth=2*sc;
-  ctx.beginPath(); ctx.roundRect(-5*sc,-10*sc,10*sc,16*sc,3*sc); ctx.fill(); ctx.stroke();
-  ctx.fillStyle='#888'; ctx.beginPath(); ctx.roundRect(-2.5*sc,4*sc,5*sc,6*sc,1*sc); ctx.fill();
+  if (!assetsReady || !img.complete || img.naturalWidth === 0) {
+    // Fallback placeholder while loading
+    ctx.beginPath(); ctx.arc(p.x, p.y - baseSize*0.3, baseSize*0.22, 0, Math.PI*2);
+    ctx.fillStyle = jersey; ctx.fill();
+    return;
+  }
+
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const drawH = baseSize * (1 + (hitFlash||0)*0.08);
+  const drawW = drawH * aspect;
+  const drawX = p.x - drawW/2;
+  const drawY = p.y - drawH * 0.92;
+
+  ctx.save();
+  if (flip) { ctx.translate(p.x,0); ctx.scale(-1,1); ctx.translate(-p.x,0); }
+  // subtle squash on hit
+  if (hitFlash > 0) {
+    ctx.translate(p.x, drawY+drawH);
+    ctx.scale(1 + hitFlash*0.06, 1 - hitFlash*0.05);
+    ctx.translate(-p.x, -(drawY+drawH));
+  }
+  ctx.drawImage(img, drawX, drawY, drawW, drawH);
   ctx.restore();
 }
 
-// ── DRAW BALL ────────────────────────────────────────────────────────────────
+// ── DRAW BALL (sprite-based with glow + trail) ───────────────────────────────
+let ballTrail = [];
 function drawBall(wx, wy, wz) {
   const p = iso(wx, wy, wz);
   const ps = iso(wx, wy, 0);
   const sc = Math.min(W,H) / 700;
-  const r = 6 * sc;
-  // Shadow on ground
+  const depthScale = 0.78 + (wy / COURT_H) * 0.5;
+  const r = 16 * sc * depthScale;
+
+  // Ground shadow
   const sh = Math.max(0.2, 1 - wz * 0.18);
-  ctx.beginPath(); ctx.ellipse(ps.x, ps.y, r*sh*1.4, r*sh*0.5, 0,0,Math.PI*2);
+  ctx.save(); ctx.filter='blur(2px)';
+  ctx.beginPath(); ctx.ellipse(ps.x, ps.y, r*sh*1.1, r*sh*0.4, 0,0,Math.PI*2);
   ctx.fillStyle = `rgba(0,0,0,${0.4 * sh})`; ctx.fill();
-  // Ball
-  const grad = ctx.createRadialGradient(p.x-r*0.3,p.y-r*0.3,r*0.1,p.x,p.y,r);
-  grad.addColorStop(0, C.ballGlow); grad.addColorStop(1, C.ballLime);
-  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
-  ctx.fillStyle = grad; ctx.fill();
-  ctx.strokeStyle='#8ab800'; ctx.lineWidth=1.5*sc; ctx.stroke();
-  // Holes (decorative)
-  ctx.fillStyle='rgba(0,0,0,0.18)';
-  const holes = [[0,0],[3,2],[-3,2],[0,-3],[3,-2],[-3,-2]];
-  holes.forEach(([hx,hy]) => {
-    ctx.beginPath(); ctx.arc(p.x+hx*sc, p.y+hy*sc, 0.9*sc,0,Math.PI*2); ctx.fill();
+  ctx.restore();
+
+  // Motion trail
+  ballTrail.push({x:p.x,y:p.y});
+  if (ballTrail.length > 6) ballTrail.shift();
+  ballTrail.forEach((t,i) => {
+    const a = (i/ballTrail.length) * 0.25;
+    ctx.beginPath(); ctx.arc(t.x, t.y, r*0.6*(i/ballTrail.length), 0, Math.PI*2);
+    ctx.fillStyle = `rgba(200,245,32,${a})`; ctx.fill();
   });
+
+  // Glow
+  const glowGrad = ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,r*1.8);
+  glowGrad.addColorStop(0, 'rgba(200,245,32,0.5)');
+  glowGrad.addColorStop(1, 'rgba(200,245,32,0)');
+  ctx.beginPath(); ctx.arc(p.x,p.y,r*1.8,0,Math.PI*2); ctx.fillStyle=glowGrad; ctx.fill();
+
+  const img = ASSETS.ball;
+  if (!assetsReady || !img.complete || img.naturalWidth === 0) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+    ctx.fillStyle = C.ballLime; ctx.fill();
+    return;
+  }
+  const aspect = img.naturalWidth / img.naturalHeight;
+  const dH = r*2.2, dW = dH*aspect;
+  ctx.drawImage(img, p.x-dW/2, p.y-dH/2, dW, dH);
 }
 
 // ── FLASH MESSAGE ────────────────────────────────────────────────────────────
@@ -361,6 +437,8 @@ class PickleballGame {
     const targetX = COURT_W * (0.15 + rand()*0.7);
     const targetY = rand() > 0.3 ? NET_Y - KITCHEN - rand()*1.5 : rand()*1.5 + 0.5;
     this._hitBall(targetX, targetY, false);
+    this._playerHitFlash = 1;
+    this.spawnHitParticles(this.player.x, this.player.y, '#f5e642');
     showFlash(rand()>0.7 ? '¡SMASH!' : '¡Dink!', '#f5e642');
     this.hitCooldown = 20;
   }
@@ -445,6 +523,8 @@ class PickleballGame {
           const targetX = COURT_W*(0.15+rand()*0.7);
           const targetY = NET_Y + KITCHEN + rand()*2;
           this._hitBall(targetX, targetY, true);
+          this._cpuHitFlash = 1;
+          this.spawnHitParticles(this.cpu.x, this.cpu.y, '#e84b3a');
           this.cpuHitCooldown = 18;
         }
       }
@@ -570,22 +650,55 @@ class PickleballGame {
 
   render() {
     ctx.clearRect(0, 0, W, H);
-
-    // Sky/BG gradient
-    const bg = ctx.createLinearGradient(0,0,0,H);
-    bg.addColorStop(0,'#1a4a2a'); bg.addColorStop(1,'#0a2010');
-    ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+    drawStadiumBg();
 
     recalcLayout();
     drawCourt();
 
+    if (this._playerHitFlash === undefined) this._playerHitFlash = 0;
+    if (this._cpuHitFlash === undefined) this._cpuHitFlash = 0;
+    this._playerHitFlash = Math.max(0, this._playerHitFlash - 0.06);
+    this._cpuHitFlash = Math.max(0, this._cpuHitFlash - 0.06);
+
     // Sort: CPU on top side renders first (lower y = renders first = appears behind)
-    drawPerson(this.cpu.x, this.cpu.y, this.cpu.jersey, this.cpu.skin, false);
+    drawPerson(this.cpu.x, this.cpu.y, this.cpu.jersey, this.cpu.skin, false, this._cpuHitFlash, true);
     drawBall(this.ball.x, this.ball.y, this.ball.z);
-    drawPerson(this.player.x, this.player.y, this.player.jersey, this.player.skin, true);
+    drawPerson(this.player.x, this.player.y, this.player.jersey, this.player.skin, true, this._playerHitFlash, false);
+
+    this.drawParticles();
 
     // HUD
     this.drawHUD();
+    this.drawVignette();
+  }
+
+  drawVignette() {
+    const grad = ctx.createRadialGradient(W*0.5,H*0.5,Math.min(W,H)*0.3,W*0.5,H*0.5,Math.max(W,H)*0.7);
+    grad.addColorStop(0,'rgba(0,0,0,0)');
+    grad.addColorStop(1,'rgba(0,0,0,0.45)');
+    ctx.fillStyle = grad; ctx.fillRect(0,0,W,H);
+  }
+
+  drawParticles() {
+    if (!this.particles) this.particles = [];
+    ctx.save();
+    this.particles.forEach(pt => {
+      ctx.globalAlpha = pt.life;
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, pt.r, 0, Math.PI*2);
+      ctx.fillStyle = pt.color; ctx.fill();
+    });
+    ctx.restore();
+    this.particles = this.particles.filter(pt => pt.life > 0);
+    this.particles.forEach(pt => { pt.x += pt.vx; pt.y += pt.vy; pt.life -= 0.04; pt.vy += 0.15; });
+  }
+
+  spawnHitParticles(wx, wy, color) {
+    const p = iso(wx, wy, 0.4);
+    if (!this.particles) this.particles = [];
+    for (let i=0;i<8;i++) {
+      const ang = rand()*Math.PI*2, spd = 1+rand()*2.5;
+      this.particles.push({ x:p.x, y:p.y, vx:Math.cos(ang)*spd, vy:Math.sin(ang)*spd*0.6-1, r:2+rand()*2, life:1, color });
+    }
   }
 
   drawHUD() {
@@ -626,12 +739,19 @@ class PickleballGame {
   }
 
   _scoreBox(x, y, w, h, label, score, color) {
-    ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.strokeStyle=color; ctx.lineWidth=3;
-    ctx.beginPath(); ctx.roundRect(x,y,w,h,10); ctx.fill(); ctx.stroke();
+    ctx.save();
+    ctx.shadowColor = color; ctx.shadowBlur = 12;
+    const grad = ctx.createLinearGradient(x,y,x,y+h);
+    grad.addColorStop(0,'rgba(20,20,25,0.85)'); grad.addColorStop(1,'rgba(8,8,12,0.85)');
+    ctx.fillStyle=grad; ctx.strokeStyle=color; ctx.lineWidth=2.5;
+    ctx.beginPath(); ctx.roundRect(x,y,w,h,12); ctx.fill(); ctx.stroke();
+    ctx.restore();
     ctx.fillStyle=color; ctx.font=`bold ${11}px Arial`; ctx.textAlign='center';
     ctx.fillText(label, x+w*0.5, y+16);
-    ctx.fillStyle='#fff'; ctx.font=`bold ${28}px Arial`;
-    ctx.fillText(score, x+w*0.5, y+h-10);
+    ctx.fillStyle='#fff'; ctx.font=`bold ${30}px Arial`;
+    ctx.shadowColor='rgba(0,0,0,0.8)'; ctx.shadowBlur=4;
+    ctx.fillText(score, x+w*0.5, y+h-9);
+    ctx.shadowBlur=0;
   }
 }
 
@@ -711,9 +831,7 @@ function frame(now) {
   } else {
     // Idle background
     ctx.clearRect(0,0,W,H);
-    const bg2 = ctx.createLinearGradient(0,0,0,H);
-    bg2.addColorStop(0,'#1a4a2a'); bg2.addColorStop(1,'#0a2010');
-    ctx.fillStyle=bg2; ctx.fillRect(0,0,W,H);
+    drawStadiumBg();
     recalcLayout();
     drawCourt();
   }
