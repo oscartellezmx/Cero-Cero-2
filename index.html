@@ -1,0 +1,732 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Pickleball</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#1a0a00;font-family:'Arial Rounded MT Bold',Arial,sans-serif}
+  canvas{display:block;touch-action:none}
+  #dev{position:fixed;top:4px;left:4px;color:#0f0;font:11px monospace;display:none;pointer-events:none}
+  #ui{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;pointer-events:none}
+  .screen{pointer-events:all;display:none;flex-direction:column;align-items:center;gap:14px;
+    background:rgba(20,8,0,0.92);border-radius:24px;padding:36px 44px;
+    border:4px solid #1a6b6b;box-shadow:0 0 40px rgba(0,200,150,0.3);max-width:420px;width:90%}
+  .screen.active{display:flex}
+  h1{margin:0;font-size:2.4em;color:#f5e642;text-shadow:3px 3px 0 #1a6b6b;letter-spacing:2px;text-align:center}
+  h2{margin:0;font-size:1.3em;color:#aff7b0;text-align:center}
+  .btn{background:linear-gradient(180deg,#f5e642,#d4b800);color:#1a0a00;border:none;
+    border-radius:14px;padding:14px 34px;font-size:1.2em;font-weight:bold;cursor:pointer;
+    border-bottom:5px solid #7a6200;transition:transform 0.1s;width:100%}
+  .btn:active{transform:scale(0.96);border-bottom:2px solid #7a6200}
+  .btn.secondary{background:linear-gradient(180deg,#1a6b6b,#0d3d3d);color:#aff7b0;border-bottom-color:#062828}
+  .label{color:#aff7b0;font-size:0.95em;align-self:flex-start;margin-bottom:-8px}
+  .swatch-row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+  .swatch{width:38px;height:38px;border-radius:50%;cursor:pointer;border:3px solid transparent;transition:border 0.15s}
+  .swatch.selected{border-color:#f5e642;box-shadow:0 0 10px #f5e642}
+  .hint{color:#7ec9c9;font-size:0.82em;text-align:center}
+  .result-score{font-size:3em;color:#f5e642;font-weight:bold;text-shadow:2px 2px 0 #1a6b6b}
+  .flash{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+    font-size:2.8em;font-weight:bold;color:#f5e642;text-shadow:3px 3px 0 #1a6b6b;
+    pointer-events:none;opacity:0;transition:none;white-space:nowrap;z-index:99}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="dev"></div>
+<div class="flash" id="flash"></div>
+<div id="ui">
+
+  <!-- TITLE SCREEN -->
+  <div class="screen active" id="titleScreen">
+    <h1>🏓 PICKLEBALL</h1>
+    <h2>El juego más divertido del mundo</h2>
+    <div class="hint">Primero en 11 pts gana (diferencia de 2)</div>
+    <div class="label">Color de ropa:</div>
+    <div class="swatch-row" id="jerseyPicker"></div>
+    <div class="label">Tono de piel:</div>
+    <div class="swatch-row" id="skinPicker"></div>
+    <button class="btn" id="btnPlay">¡JUGAR!</button>
+    <div class="hint">WASD/Flechas · ESPACIO para golpear · Toca la cancha en móvil</div>
+  </div>
+
+  <!-- RESULT SCREEN -->
+  <div class="screen" id="resultScreen">
+    <h1 id="resultTitle"></h1>
+    <div class="result-score" id="resultScore"></div>
+    <button class="btn" id="btnAgain">¡Otra vez!</button>
+    <button class="btn secondary" id="btnCustomize">Cambiar jugador</button>
+  </div>
+
+</div>
+<script type="module">
+import { STR } from './strings.js';
+
+// ── SEEDED RNG ──────────────────────────────────────────────────────────────
+let seed = Date.now() & 0x7fffffff;
+function rand() { seed = (seed * 1664525 + 1013904223) & 0x7fffffff; return seed / 0x7fffffff; }
+function randRange(a, b) { return a + rand() * (b - a); }
+
+// ── CANVAS & RESIZE ─────────────────────────────────────────────────────────
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const DPR_CAP = 1.5;
+let W = 0, H = 0;
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, DPR_CAP);
+  W = innerWidth; H = innerHeight;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (game) game.resize();
+}
+addEventListener('resize', resize);
+addEventListener('orientationchange', resize);
+
+// ── INPUT ───────────────────────────────────────────────────────────────────
+const BIND = { KeyW:'up', KeyS:'down', KeyA:'left', KeyD:'right', Space:'hit',
+               ArrowUp:'up', ArrowDown:'down', ArrowLeft:'left', ArrowRight:'right' };
+const held = new Set();
+let hitPressed = false;
+addEventListener('keydown', e => {
+  const c = BIND[e.code];
+  if (c) { if(c==='hit' && !held.has('hit')) hitPressed=true; held.add(c); e.preventDefault(); }
+});
+addEventListener('keyup', e => { const c = BIND[e.code]; if (c) held.delete(c); });
+
+// ── CUSTOMIZATION ───────────────────────────────────────────────────────────
+const JERSEY_COLORS = ['#f5e642','#e84b3a','#3a8ce8','#4be87a','#e8883a','#b84be8','#ffffff','#333333'];
+const SKIN_TONES    = ['#ffd5a0','#e8b87a','#c8854a','#8b5e2a','#5c3410','#ffe0d0'];
+let playerJersey = JERSEY_COLORS[0];
+let playerSkin   = SKIN_TONES[0];
+
+function buildPicker(containerId, colors, onSelect, getSelected) {
+  const el = document.getElementById(containerId);
+  el.innerHTML = '';
+  colors.forEach(c => {
+    const d = document.createElement('div');
+    d.className = 'swatch' + (c === getSelected() ? ' selected' : '');
+    d.style.background = c;
+    d.style.border = c === '#ffffff' ? '3px solid #aaa' : '3px solid transparent';
+    d.onclick = () => { onSelect(c); buildPicker(containerId, colors, onSelect, getSelected); };
+    el.appendChild(d);
+  });
+}
+
+buildPicker('jerseyPicker', JERSEY_COLORS, c => { playerJersey = c; }, () => playerJersey);
+buildPicker('skinPicker',   SKIN_TONES,   c => { playerSkin   = c; }, () => playerSkin);
+
+// ── ISO PROJECTION ──────────────────────────────────────────────────────────
+// Court world: X = right-along-net, Y = depth (away from player baseline)
+// Iso: screenX = cx + (wx - wy) * tileW/2, screenY = cy + (wx + wy) * tileH/2
+function iso(wx, wy, wz) {
+  const tW = TILE_W, tH = TILE_H;
+  return {
+    x: CX + (wx - wy) * tW * 0.5,
+    y: CY + (wx + wy) * tH * 0.5 - wz * tH
+  };
+}
+
+// ── COURT GEOMETRY ──────────────────────────────────────────────────────────
+// Pickleball court: 13.41m wide × 6.1m kitchen + 4.57m backcourt each side = 20ft net
+// Simplified: 10 × 18 world units. Net at y=9. Player baseline y=17. CPU baseline y=1.
+const COURT_W = 10, COURT_H = 18;
+const KITCHEN = 2.1; // non-volley zone depth from net each side
+let CX, CY, TILE_W, TILE_H;
+
+function recalcLayout() {
+  const scale = Math.min(W / 900, H / 600, 1.4);
+  TILE_W = 52 * scale;
+  TILE_H = 26 * scale;
+  CX = W * 0.5;
+  CY = H * 0.18;
+}
+
+// ── COLORS ──────────────────────────────────────────────────────────────────
+const C = {
+  court:    '#d4845a',
+  courtShadow: '#b86840',
+  line:     '#f5f0dc',
+  kitchen:  '#c87850',
+  net:      '#1a6b6b',
+  netPost:  '#0d3d3d',
+  ballLime: '#c8f520',
+  ballGlow: '#e8ff60',
+  shadow:   'rgba(0,0,0,0.35)',
+};
+
+// ── DRAW COURT ───────────────────────────────────────────────────────────────
+function drawCourt() {
+  // Fill court quads
+  function courtQuad(x0,y0,x1,y1, fill) {
+    const a = iso(x0,y0,0), b = iso(x1,y0,0), c2 = iso(x1,y1,0), d = iso(x0,y1,0);
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y);
+    ctx.lineTo(c2.x,c2.y); ctx.lineTo(d.x,d.y); ctx.closePath();
+    ctx.fillStyle = fill; ctx.fill();
+  }
+  // Main court
+  courtQuad(0,0,COURT_W,COURT_H, C.court);
+  // Kitchen zones
+  const netY = COURT_H * 0.5;
+  courtQuad(0, netY - KITCHEN, COURT_W, netY, C.kitchen);
+  courtQuad(0, netY, COURT_W, netY + KITCHEN, C.kitchen);
+
+  // Court lines
+  ctx.strokeStyle = C.line; ctx.lineWidth = 2.5;
+  function line(x0,y0,x1,y1) {
+    const a = iso(x0,y0,0), b = iso(x1,y1,0);
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+  }
+  // Perimeter
+  line(0,0,COURT_W,0); line(0,0,0,COURT_H);
+  line(COURT_W,0,COURT_W,COURT_H); line(0,COURT_H,COURT_W,COURT_H);
+  // Centreline (side-to-side)
+  line(0, netY, COURT_W, netY);
+  // Kitchen lines
+  line(0, netY-KITCHEN, COURT_W, netY-KITCHEN);
+  line(0, netY+KITCHEN, COURT_W, netY+KITCHEN);
+  // Centre service boxes split
+  line(COURT_W*0.5, netY-KITCHEN, COURT_W*0.5, 0);
+  line(COURT_W*0.5, netY+KITCHEN, COURT_W*0.5, COURT_H);
+
+  // Net
+  const netSteps = 12;
+  for (let i = 0; i <= netSteps; i++) {
+    const x = i / netSteps * COURT_W;
+    const a = iso(x, netY, 0), b = iso(x, netY, 0.6);
+    ctx.strokeStyle = C.net; ctx.lineWidth = i===0||i===netSteps ? 4 : 1.5;
+    ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
+  }
+  // Net top rail
+  const nl = iso(0,netY,0.6), nr = iso(COURT_W,netY,0.6);
+  ctx.beginPath(); ctx.moveTo(nl.x,nl.y); ctx.lineTo(nr.x,nr.y);
+  ctx.strokeStyle='#f5f0dc'; ctx.lineWidth=3; ctx.stroke();
+}
+
+// ── DRAW PERSON ──────────────────────────────────────────────────────────────
+function drawPerson(wx, wy, jersey, skin, flip) {
+  const p = iso(wx, wy, 0);
+  const sc = Math.min(W,H) / 700;
+  const r = 10 * sc;
+  const sx = p.x + (flip ? -2*sc : 2*sc);
+  const sy = p.y;
+
+  // Shadow
+  ctx.beginPath(); ctx.ellipse(p.x, p.y+2*sc, r*1.2, r*0.4, 0,0,Math.PI*2);
+  ctx.fillStyle = C.shadow; ctx.fill();
+
+  // Legs
+  ctx.strokeStyle = skin; ctx.lineWidth = 4*sc;
+  ctx.beginPath(); ctx.moveTo(sx, sy-r*0.5);
+  ctx.lineTo(sx - 4*sc*(flip?-1:1), sy + r*1.2); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx, sy-r*0.5);
+  ctx.lineTo(sx + 4*sc*(flip?-1:1), sy + r*1.2); ctx.stroke();
+  // Shoes
+  ctx.fillStyle = '#333'; ctx.strokeStyle='#222'; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.ellipse(sx - 4*sc*(flip?-1:1), sy+r*1.2, 4*sc,2*sc,0,0,Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(sx + 4*sc*(flip?-1:1), sy+r*1.2, 4*sc,2*sc,0,0,Math.PI*2); ctx.fill();
+  // Body
+  ctx.fillStyle = jersey; ctx.strokeStyle='#1a6b6b'; ctx.lineWidth=2*sc;
+  ctx.beginPath(); ctx.roundRect(sx-r*0.7, sy-r*1.6, r*1.4, r*1.4, 4*sc); ctx.fill(); ctx.stroke();
+  // Head
+  ctx.fillStyle = skin; ctx.strokeStyle='#5c3410'; ctx.lineWidth=2*sc;
+  ctx.beginPath(); ctx.arc(sx, sy-r*1.8, r*0.7, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  // Hair
+  ctx.fillStyle='#3a1a00';
+  ctx.beginPath(); ctx.arc(sx, sy-r*2.1, r*0.55, Math.PI, 0); ctx.fill();
+  // Eyes
+  ctx.fillStyle='#fff';
+  ctx.beginPath(); ctx.arc(sx+(flip?2:-2)*sc, sy-r*1.9, 2*sc,0,Math.PI*2); ctx.fill();
+  ctx.fillStyle='#1a1a3a';
+  ctx.beginPath(); ctx.arc(sx+(flip?2.5:-1.5)*sc, sy-r*1.9, 1*sc,0,Math.PI*2); ctx.fill();
+  // Paddle arm
+  ctx.strokeStyle = skin; ctx.lineWidth=4*sc;
+  ctx.beginPath(); ctx.moveTo(sx+r*0.7*(flip?-1:1), sy-r*1.1);
+  ctx.lineTo(sx+r*1.8*(flip?-1:1), sy-r*0.5); ctx.stroke();
+  // Paddle
+  const px2 = sx+r*1.8*(flip?-1:1), py2 = sy-r*0.5;
+  ctx.save(); ctx.translate(px2,py2); ctx.rotate(flip?-0.6:0.6);
+  ctx.fillStyle='#d4845a'; ctx.strokeStyle='#1a6b6b'; ctx.lineWidth=2*sc;
+  ctx.beginPath(); ctx.roundRect(-5*sc,-10*sc,10*sc,16*sc,3*sc); ctx.fill(); ctx.stroke();
+  ctx.fillStyle='#888'; ctx.beginPath(); ctx.roundRect(-2.5*sc,4*sc,5*sc,6*sc,1*sc); ctx.fill();
+  ctx.restore();
+}
+
+// ── DRAW BALL ────────────────────────────────────────────────────────────────
+function drawBall(wx, wy, wz) {
+  const p = iso(wx, wy, wz);
+  const ps = iso(wx, wy, 0);
+  const sc = Math.min(W,H) / 700;
+  const r = 6 * sc;
+  // Shadow on ground
+  const sh = Math.max(0.2, 1 - wz * 0.18);
+  ctx.beginPath(); ctx.ellipse(ps.x, ps.y, r*sh*1.4, r*sh*0.5, 0,0,Math.PI*2);
+  ctx.fillStyle = `rgba(0,0,0,${0.4 * sh})`; ctx.fill();
+  // Ball
+  const grad = ctx.createRadialGradient(p.x-r*0.3,p.y-r*0.3,r*0.1,p.x,p.y,r);
+  grad.addColorStop(0, C.ballGlow); grad.addColorStop(1, C.ballLime);
+  ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2);
+  ctx.fillStyle = grad; ctx.fill();
+  ctx.strokeStyle='#8ab800'; ctx.lineWidth=1.5*sc; ctx.stroke();
+  // Holes (decorative)
+  ctx.fillStyle='rgba(0,0,0,0.18)';
+  const holes = [[0,0],[3,2],[-3,2],[0,-3],[3,-2],[-3,-2]];
+  holes.forEach(([hx,hy]) => {
+    ctx.beginPath(); ctx.arc(p.x+hx*sc, p.y+hy*sc, 0.9*sc,0,Math.PI*2); ctx.fill();
+  });
+}
+
+// ── FLASH MESSAGE ────────────────────────────────────────────────────────────
+const flashEl = document.getElementById('flash');
+let flashTimer = 0;
+function showFlash(msg, color='#f5e642') {
+  flashEl.textContent = msg;
+  flashEl.style.color = color;
+  flashEl.style.opacity = '1';
+  flashEl.style.fontSize = Math.min(W,H)*0.07+'px';
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { flashEl.style.opacity='0'; }, 900);
+}
+
+// ── GAME STATE ───────────────────────────────────────────────────────────────
+const STEP = 1000 / 60;
+const NET_Y = COURT_H * 0.5;
+const NET_H = 0.9; // world z height of net
+const GRAVITY = 0.012;
+const PLAYER_SPEED = 0.07;
+const CPU_SPEED = 0.055;
+
+class PickleballGame {
+  constructor() {
+    this.state = 'serving'; // serving | rally | point | gameover
+    this.playerScore = 0;
+    this.cpuScore = 0;
+    this.server = 'player'; // who serves
+    this.scoreToWin = 11;
+
+    // Player: bottom side (y near COURT_H)
+    this.player = { x: COURT_W*0.5, y: COURT_H-1.5, jersey: playerJersey, skin: playerSkin };
+    // CPU: top side (y near 0)
+    this.cpu = { x: COURT_W*0.5, y: 1.5, jersey: '#e84b3a', skin: SKIN_TONES[2] };
+    this.cpuState = 'position'; // position | chase | hit | recover
+    this.cpuTarget = { x: COURT_W*0.5, y: 1.5 };
+
+    // Ball
+    this.ball = { x: COURT_W*0.5, y: COURT_H-1.5, z: 0, vx:0, vy:0, vz:0 };
+    this.ballBounces = 0;
+    this.lastHitter = null; // 'player' | 'cpu'
+    this.kitchenFault = false;
+
+    this.serveTimer = 60;
+    this.pointTimer = 0;
+    this.hitCooldown = 0;
+    this.cpuHitCooldown = 0;
+    this.cpuDifficulty = 0.6; // 0=easy 1=hard; increases with score
+  }
+
+  resize() { recalcLayout(); }
+
+  launchServe(byPlayer) {
+    const bx = byPlayer ? this.player.x : this.cpu.x;
+    const by = byPlayer ? this.player.y : this.cpu.y;
+    this.ball.x = bx; this.ball.y = by; this.ball.z = 0.3;
+    // Serve diagonally to opposite service box
+    const targetX = COURT_W * (0.25 + rand()*0.5);
+    const targetY = byPlayer ? NET_Y - 1.2 - rand()*0.8 : NET_Y + 1.2 + rand()*0.8;
+    const dx = targetX - bx, dy = targetY - by;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    const speed = 0.18 + rand()*0.06;
+    this.ball.vx = dx/dist*speed;
+    this.ball.vy = dy/dist*speed;
+    this.ball.vz = 0.22 + rand()*0.04;
+    this.lastHitter = byPlayer ? 'player' : 'cpu';
+    this.ballBounces = 0;
+    this.state = 'rally';
+    showFlash('SAQUE', '#aff7b0');
+  }
+
+  playerHit() {
+    if (this.hitCooldown > 0) return;
+    const dx = this.ball.x - this.player.x;
+    const dy = this.ball.y - this.player.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    const reach = 1.4;
+    if (dist > reach || this.ball.z > 1.5) return;
+    if (this.lastHitter === 'player') return; // can't hit twice
+    // Check kitchen fault: player can't volley in kitchen
+    if (this.ball.z > 0.05 && this.player.y > NET_Y - KITCHEN && this.player.y < NET_Y) {
+      this.fault('player', 'Falta: Cocina!'); return;
+    }
+    // Aim toward CPU side
+    const targetX = COURT_W * (0.15 + rand()*0.7);
+    const targetY = rand() > 0.3 ? NET_Y - KITCHEN - rand()*1.5 : rand()*1.5 + 0.5;
+    this._hitBall(targetX, targetY, false);
+    showFlash(rand()>0.7 ? '¡SMASH!' : '¡Dink!', '#f5e642');
+    this.hitCooldown = 20;
+  }
+
+  _hitBall(targetX, targetY, byCpu) {
+    const bx = this.ball.x, by = this.ball.y;
+    const dx = targetX - bx, dy = targetY - by;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    const speed = byCpu ? (0.14 + rand()*0.05 * this.cpuDifficulty) : 0.2 + rand()*0.05;
+    this.ball.vx = dx/dist*speed;
+    this.ball.vy = dy/dist*speed;
+    this.ball.vz = 0.15 + rand()*0.1;
+    this.lastHitter = byCpu ? 'cpu' : 'player';
+    this.ballBounces = 0;
+  }
+
+  fault(loser, msg) {
+    this.state = 'point';
+    this.pointTimer = 90;
+    if (loser === 'player') {
+      this.cpuScore++;
+      showFlash(msg || '¡Punto CPU!', '#ff7070');
+    } else {
+      this.playerScore++;
+      showFlash(msg || '¡Tu punto!', '#aff7b0');
+    }
+    this.checkWin();
+  }
+
+  checkWin() {
+    const ps = this.playerScore, cs = this.cpuScore;
+    const target = this.scoreToWin;
+    if ((ps >= target || cs >= target) && Math.abs(ps-cs) >= 2) {
+      this.state = 'gameover';
+      setTimeout(() => this.showResult(), 1200);
+    }
+  }
+
+  showResult() {
+    const won = this.playerScore > this.cpuScore;
+    document.getElementById('resultTitle').textContent = won ? STR.win : STR.lose;
+    document.getElementById('resultScore').textContent = `${this.playerScore} - ${this.cpuScore}`;
+    document.getElementById('resultScreen').classList.add('active');
+  }
+
+  cpuThink() {
+    const ball = this.ball;
+    // Only act when ball is heading toward CPU side
+    const ballOnCpuSide = ball.vy < 0 || ball.y < NET_Y;
+    this.cpuDifficulty = Math.min(0.95, 0.5 + (this.cpuScore + this.playerScore)*0.015);
+
+    if (!ballOnCpuSide || this.lastHitter === 'cpu') {
+      // Reposition near baseline
+      this.cpuTarget.x = COURT_W*0.5 + (rand()-0.5)*2;
+      this.cpuTarget.y = 1.5;
+    } else {
+      // Track ball X with some lag
+      const lag = 1 - this.cpuDifficulty * 0.5;
+      this.cpuTarget.x = ball.x + (rand()-0.5)*lag*2;
+      this.cpuTarget.y = Math.max(0.5, ball.y - 0.5);
+    }
+
+    // Move toward target
+    const dx = this.cpuTarget.x - this.cpu.x;
+    const dy = this.cpuTarget.y - this.cpu.y;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if (dist > 0.05) {
+      this.cpu.x += dx/dist * CPU_SPEED * this.cpuDifficulty;
+      this.cpu.y += dy/dist * CPU_SPEED;
+      this.cpu.x = Math.max(0.3, Math.min(COURT_W-0.3, this.cpu.x));
+      this.cpu.y = Math.max(0.3, Math.min(NET_Y-0.05, this.cpu.y));
+    }
+
+    // CPU hit
+    if (this.cpuHitCooldown > 0) { this.cpuHitCooldown--; return; }
+    if (this.lastHitter === 'player' && ballOnCpuSide && ball.z < 1.2) {
+      const hdx = ball.x - this.cpu.x, hdy = ball.y - this.cpu.y;
+      const hdist = Math.sqrt(hdx*hdx+hdy*hdy);
+      // CPU misses based on difficulty
+      if (hdist < 1.4 * (0.8 + (1-this.cpuDifficulty)*0.8)) {
+        if (rand() < this.cpuDifficulty) {
+          const targetX = COURT_W*(0.15+rand()*0.7);
+          const targetY = NET_Y + KITCHEN + rand()*2;
+          this._hitBall(targetX, targetY, true);
+          this.cpuHitCooldown = 18;
+        }
+      }
+    }
+  }
+
+  update(dt, cmds) {
+    if (this.state === 'gameover') return;
+    if (this.hitCooldown > 0) this.hitCooldown--;
+
+    // Serving
+    if (this.state === 'serving') {
+      this.serveTimer--;
+      if (this.serveTimer <= 0) {
+        this.launchServe(this.server === 'player');
+      }
+      // Show serve ball at player/cpu feet
+      if (this.server === 'player') {
+        this.ball.x = this.player.x; this.ball.y = this.player.y - 0.3; this.ball.z = 0.3;
+      } else {
+        this.ball.x = this.cpu.x; this.ball.y = this.cpu.y + 0.3; this.ball.z = 0.3;
+      }
+    }
+
+    // Point pause
+    if (this.state === 'point') {
+      this.pointTimer--;
+      if (this.pointTimer <= 0 && this.state !== 'gameover') {
+        // New serve: winner of point serves
+        this.server = this.playerScore > this.cpuScore ? 'player' : 'cpu';
+        this.state = 'serving';
+        this.serveTimer = 90;
+        if (this.server === 'player') {
+          this.player.x = COURT_W*0.5; this.player.y = COURT_H-1.5;
+        } else {
+          this.cpu.x = COURT_W*0.5; this.cpu.y = 1.5;
+        }
+      }
+      return;
+    }
+
+    // Player movement
+    if (this.state === 'rally' || this.state === 'serving') {
+      let mx=0, my=0;
+      if (cmds.has('left'))  mx -= 1;
+      if (cmds.has('right')) mx += 1;
+      if (cmds.has('up'))    my -= 1;
+      if (cmds.has('down'))  my += 1;
+      const mlen = Math.sqrt(mx*mx+my*my);
+      if (mlen > 0) {
+        this.player.x += mx/mlen * PLAYER_SPEED;
+        this.player.y += my/mlen * PLAYER_SPEED;
+        // Constrain to player side (below net)
+        this.player.x = Math.max(0.3, Math.min(COURT_W-0.3, this.player.x));
+        this.player.y = Math.max(NET_Y+0.05, Math.min(COURT_H-0.3, this.player.y));
+      }
+
+      if (cmds.has('hit') && this.state === 'rally') this.playerHit();
+    }
+
+    if (this.state !== 'rally') return;
+
+    // Ball physics
+    const b = this.ball;
+    b.x += b.vx;
+    b.y += b.vy;
+    b.z += b.vz;
+    b.vz -= GRAVITY;
+
+    // Bounce on ground
+    if (b.z <= 0) {
+      b.z = 0;
+      b.vz = Math.abs(b.vz) * 0.62;
+      if (b.vz < 0.03) b.vz = 0;
+      b.vx *= 0.88; b.vy *= 0.88;
+      this.ballBounces++;
+
+      // Check bounce location
+      const onPlayerSide = b.y > NET_Y;
+      const onCpuSide    = b.y < NET_Y;
+      const inBounds = b.x>=0 && b.x<=COURT_W && b.y>=0 && b.y<=COURT_H;
+
+      if (!inBounds) {
+        // Out of bounds
+        if (this.lastHitter === 'player') this.fault('player', '¡Fuera!');
+        else this.fault('cpu', '¡Fuera del CPU!');
+        return;
+      }
+
+      // Second bounce = winner (pickleball: ball must bounce once each side on serve)
+      if (onPlayerSide && this.lastHitter === 'cpu') {
+        if (this.ballBounces >= 2) { this.fault('player', '¡Doble bote!'); return; }
+      }
+      if (onCpuSide && this.lastHitter === 'player') {
+        if (this.ballBounces >= 2) { this.fault('cpu', '¡Punto tuyo!'); return; }
+      }
+    }
+
+    // Net collision
+    if (b.y < NET_Y && b.vy < 0 && b.y + b.vy*2 > NET_Y - 0.3) {
+      if (b.z < NET_H) {
+        // Hit net
+        if (this.lastHitter === 'player') this.fault('player', '¡Red!');
+        else this.fault('cpu', '¡Red del CPU!');
+        return;
+      }
+    }
+
+    // Wall bounds
+    if (b.x < 0) { b.x = 0; b.vx = Math.abs(b.vx)*0.7; }
+    if (b.x > COURT_W) { b.x = COURT_W; b.vx = -Math.abs(b.vx)*0.7; }
+
+    // Ball way out of court (long)
+    if (b.y < -2 || b.y > COURT_H+2) {
+      if (this.lastHitter === 'player') this.fault('player', '¡Larga!');
+      else this.fault('cpu', '¡Larga del CPU!');
+      return;
+    }
+
+    // CPU logic
+    this.cpuThink();
+  }
+
+  render() {
+    ctx.clearRect(0, 0, W, H);
+
+    // Sky/BG gradient
+    const bg = ctx.createLinearGradient(0,0,0,H);
+    bg.addColorStop(0,'#1a4a2a'); bg.addColorStop(1,'#0a2010');
+    ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+
+    recalcLayout();
+    drawCourt();
+
+    // Sort: CPU on top side renders first (lower y = renders first = appears behind)
+    drawPerson(this.cpu.x, this.cpu.y, this.cpu.jersey, this.cpu.skin, false);
+    drawBall(this.ball.x, this.ball.y, this.ball.z);
+    drawPerson(this.player.x, this.player.y, this.player.jersey, this.player.skin, true);
+
+    // HUD
+    this.drawHUD();
+  }
+
+  drawHUD() {
+    const pad = 14, bw = Math.min(W*0.35, 220), bh = 56;
+    const bx = W*0.5 - bw - 8, cx2 = W*0.5 + 8;
+    const by = 10;
+
+    // Player score box
+    this._scoreBox(bx, by, bw, bh, STR.labelPlayer, this.playerScore, this.player.jersey);
+    this._scoreBox(cx2, by, bw, bh, STR.labelCPU, this.cpuScore, '#e84b3a');
+
+    // State hint
+    if (this.state === 'serving') {
+      const msg = this.server === 'player' ? '▸ Tu saque — espera…' : '▸ Saque del CPU…';
+      ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(W*0.5-130, by+bh+8, 260, 28);
+      ctx.fillStyle='#aff7b0'; ctx.font=`bold ${14}px Arial`;
+      ctx.textAlign='center'; ctx.fillText(msg, W*0.5, by+bh+26);
+    }
+
+    // Mobile hit button
+    if ('ontouchstart' in window) {
+      ctx.fillStyle='rgba(245,230,66,0.22)'; ctx.strokeStyle='#f5e642'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.roundRect(W*0.5-55, H-80, 110, 55, 12); ctx.fill(); ctx.stroke();
+      ctx.fillStyle='#f5e642'; ctx.font=`bold ${16}px Arial`; ctx.textAlign='center';
+      ctx.fillText('🏓 GOLPEAR', W*0.5, H-45);
+    }
+
+    // Controls hint (first 5 seconds)
+    if (this._showHint === undefined) this._showHint = 300;
+    if (this._showHint > 0) {
+      this._showHint--;
+      ctx.globalAlpha = Math.min(1, this._showHint/60);
+      ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(10, H-60, 300, 45);
+      ctx.fillStyle='#aff7b0'; ctx.font=`${12}px Arial`; ctx.textAlign='left';
+      ctx.fillText('WASD/Flechas = mover  |  ESPACIO = golpear', 18, H-37);
+      ctx.globalAlpha=1;
+    }
+  }
+
+  _scoreBox(x, y, w, h, label, score, color) {
+    ctx.fillStyle='rgba(0,0,0,0.65)'; ctx.strokeStyle=color; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.roundRect(x,y,w,h,10); ctx.fill(); ctx.stroke();
+    ctx.fillStyle=color; ctx.font=`bold ${11}px Arial`; ctx.textAlign='center';
+    ctx.fillText(label, x+w*0.5, y+16);
+    ctx.fillStyle='#fff'; ctx.font=`bold ${28}px Arial`;
+    ctx.fillText(score, x+w*0.5, y+h-10);
+  }
+}
+
+// ── TOUCH HIT BUTTON ─────────────────────────────────────────────────────────
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  for (const t of e.changedTouches) {
+    // Bottom center = hit button
+    if (t.clientY > H - 85 && Math.abs(t.clientX - W*0.5) < 65) {
+      if (game && game.state === 'rally') { game.playerHit(); }
+    } else {
+      // Touch movement: left/right/up/down relative to player
+      if (game && game.player) {
+        const p = iso(game.player.x, game.player.y, 0);
+        const dx = t.clientX - p.x, dy = t.clientY - p.y;
+        held.clear();
+        if (Math.abs(dx) > Math.abs(dy)) {
+          if (dx > 0) held.add('right'); else held.add('left');
+        } else {
+          if (dy > 0) held.add('down'); else held.add('up');
+        }
+      }
+    }
+  }
+}, { passive: false });
+canvas.addEventListener('touchend', e => { e.preventDefault(); held.clear(); }, { passive:false });
+
+// ── SCREEN MANAGEMENT ────────────────────────────────────────────────────────
+let game = null;
+
+function startGame() {
+  document.getElementById('titleScreen').classList.remove('active');
+  document.getElementById('resultScreen').classList.remove('active');
+  game = new PickleballGame();
+  game.player.jersey = playerJersey;
+  game.player.skin = playerSkin;
+}
+
+document.getElementById('btnPlay').onclick = startGame;
+document.getElementById('btnAgain').onclick = () => {
+  document.getElementById('resultScreen').classList.remove('active');
+  game = new PickleballGame();
+  game.player.jersey = playerJersey;
+  game.player.skin = playerSkin;
+};
+document.getElementById('btnCustomize').onclick = () => {
+  document.getElementById('resultScreen').classList.remove('active');
+  document.getElementById('titleScreen').classList.add('active');
+  buildPicker('jerseyPicker', JERSEY_COLORS, c => { playerJersey=c; }, () => playerJersey);
+  buildPicker('skinPicker',   SKIN_TONES,   c => { playerSkin=c;   }, () => playerSkin);
+  game = null;
+};
+
+// ── MAIN LOOP ────────────────────────────────────────────────────────────────
+let acc=0, last=performance.now(), paused=false, frames=0, fpsAt=last, fps=0;
+addEventListener('blur',  () => paused=true);
+addEventListener('focus', () => { paused=false; last=performance.now(); });
+
+const dev = new URLSearchParams(location.search).has('dev');
+if (dev) document.getElementById('dev').style.display='block';
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (paused) return;
+  acc += now - last; last = now;
+  const cmds = new Set([...held]);
+  if (hitPressed) { cmds.add('hit'); hitPressed=false; }
+
+  while (acc >= STEP) {
+    if (game) game.update(STEP, cmds);
+    cmds.delete('hit'); // consume hit once
+    acc -= STEP;
+  }
+
+  if (game) {
+    game.render();
+  } else {
+    // Idle background
+    ctx.clearRect(0,0,W,H);
+    const bg2 = ctx.createLinearGradient(0,0,0,H);
+    bg2.addColorStop(0,'#1a4a2a'); bg2.addColorStop(1,'#0a2010');
+    ctx.fillStyle=bg2; ctx.fillRect(0,0,W,H);
+    recalcLayout();
+    drawCourt();
+  }
+
+  if (dev && (frames++, now-fpsAt>=500)) {
+    fps=Math.round(frames*1000/(now-fpsAt)); frames=0; fpsAt=now;
+    document.getElementById('dev').textContent=fps+' fps';
+  }
+}
+
+resize();
+recalcLayout();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
