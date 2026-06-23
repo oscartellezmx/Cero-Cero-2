@@ -1,5 +1,5 @@
 export const STR = {
-  title: "PICKLEBALL",
+  title: "PICKLEBALL SMASH CHAMPIONS",
   subtitle: "El juego más divertido del mundo",
   btnPlay: "¡JUGAR!",
   btnCustomize: "Personalizar jugador",
@@ -8,6 +8,7 @@ export const STR = {
   labelScore: "MARCADOR",
   labelColor: "Color de ropa:",
   labelSkin: "Tono de piel:",
+  labelCharacter: "Elige tu campeón:",
   serving: "SAQUE",
   rally: "¡RALLY!",
   point: "¡PUNTO!",
@@ -22,4 +23,16 @@ export const STR = {
   smash: "¡SMASH!",
   serve: "Saque al frente",
   scoreToWin: "Primero en 11 pts (diferencia de 2)",
+  characters: {
+    classic: "Clásico",
+    luchador: "El Enmascarado",
+    sumo: "Gran Sumo",
+    charro: "Charro Campeón",
+    astronauta: "Cosmo Smash",
+    vikingo: "Vikingo Furioso",
+    boxeador: "Golpe de Hierro",
+    catrina: "La Catrina",
+    rollerderby: "Roller Rebelde",
+  },
 };
+
